@@ -43353,11 +43353,6 @@ $as_echo "$as_me: WARNING: GStreamer not available... disabling wxMediaCtrl" >&2
 fi
 
 
-if test "$wxUSE_MSW" = 1 ; then
-    EXTRALIBS_STC="-limm32"
-fi
-
-
 if test "x$prefix" != "xNONE"; then
     wxPREFIX=$prefix
 else
