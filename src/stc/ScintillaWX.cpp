@@ -50,6 +50,7 @@
 #ifdef __WXMSW__
     // GetHwndOf()
     #include "wx/msw/private.h"
+    #include "wx/msw/private/imm.h"
 #endif
 #ifdef __WXGTK20__
     #include <gdk/gdk.h>
@@ -1438,10 +1439,6 @@ sptr_t ScintillaWX::DirectFunction(
 
 #ifdef __WXMSW__
 
-#ifdef __VISUALC__
-#pragma comment(lib, "imm32.lib")
-#endif
-
 namespace {
 
 POINT POINTFromPoint(Point pt) wxNOEXCEPT {
@@ -1450,41 +1447,6 @@ POINT POINTFromPoint(Point pt) wxNOEXCEPT {
     ret.y = static_cast<LONG>(pt.y);
     return ret;
 }
-
-class IMContext {
-    HWND hwnd;
-public:
-    HIMC hIMC;
-    IMContext(HWND hwnd_) wxNOEXCEPT :
-        hwnd(hwnd_), hIMC(::ImmGetContext(hwnd_)) {
-    }
-    ~IMContext() {
-        if (hIMC)
-            ::ImmReleaseContext(hwnd, hIMC);
-    }
-
-    unsigned int GetImeCaretPos() const wxNOEXCEPT {
-        return ImmGetCompositionStringW(hIMC, GCS_CURSORPOS, wxNullPtr, 0);
-    }
-
-    std::vector<BYTE> GetImeAttributes() {
-        const int attrLen = ::ImmGetCompositionStringW(hIMC, GCS_COMPATTR, wxNullPtr, 0);
-        std::vector<BYTE> attr(attrLen, 0);
-        ::ImmGetCompositionStringW(hIMC, GCS_COMPATTR, &attr[0], static_cast<DWORD>(attr.size()));
-        return attr;
-    }
-
-    std::wstring GetCompositionString(DWORD dwIndex) {
-        const LONG byteLen = ::ImmGetCompositionStringW(hIMC, dwIndex, wxNullPtr, 0);
-        std::wstring wcs(byteLen / 2, 0);
-        ::ImmGetCompositionStringW(hIMC, dwIndex, &wcs[0], byteLen);
-        return wcs;
-    }
-private:
-    // Private so IMContext objects can not be copied.
-    IMContext(const IMContext&);
-    IMContext& operator=(const IMContext&);
-};
 
 }
 
@@ -1499,35 +1461,39 @@ HWND ScintillaWX::MainHWND() const wxNOEXCEPT {
 void ScintillaWX::ImeStartComposition() {
     if (caret.active) {
         // Move IME Window to current caret position
-        IMContext imc(stc->GetHandle());
-        const Point pos = PointMainCaret();
-        COMPOSITIONFORM CompForm;
-        CompForm.dwStyle = CFS_POINT;
-        CompForm.ptCurrentPos = POINTFromPoint(pos);
+        wxIMCContext imc(stc->GetHandle());
+        if (imc) {
+            const wxIMMFunctions& imm = wxIMMFunctions::Get();
+        
+            const Point pos = PointMainCaret();
+            COMPOSITIONFORM CompForm;
+            CompForm.dwStyle = CFS_POINT;
+            CompForm.ptCurrentPos = POINTFromPoint(pos);
 
-        ::ImmSetCompositionWindow(imc.hIMC, &CompForm);
+            imm.SetCompositionWindow(imc, &CompForm);
 
-        // Set font of IME window to same as surrounded text.
-        if (stylesValid) {
-            // Since the style creation code has been made platform independent,
-            // The logfont for the IME is recreated here.
-            const int styleHere = pdoc->StyleIndexAt(sel.MainCaret());
-            LOGFONTW lf = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, L"" };
-            int sizeZoomed = vs.styles[styleHere].size + vs.zoomLevel * SC_FONT_SIZE_MULTIPLIER;
-            if (sizeZoomed <= 2 * SC_FONT_SIZE_MULTIPLIER) // Hangs if sizeZoomed <= 1
-                sizeZoomed = 2 * SC_FONT_SIZE_MULTIPLIER;
-            // The negative is to allow for leading
-            lf.lfHeight = -::MulDiv(sizeZoomed, stc->GetDPI().y, 72 * SC_FONT_SIZE_MULTIPLIER);
-            lf.lfWeight = vs.styles[styleHere].weight;
-            lf.lfItalic = static_cast<BYTE>(vs.styles[styleHere].italic ? 1 : 0);
-            lf.lfCharSet = DEFAULT_CHARSET;
-            lf.lfFaceName[0] = L'\0';
-            if (vs.styles[styleHere].fontName) {
-                const char* fontName = vs.styles[styleHere].fontName;
-                UTF16FromUTF8(fontName, strlen(fontName)+1, lf.lfFaceName, LF_FACESIZE);
+            // Set font of IME window to same as surrounded text.
+            if (stylesValid) {
+                // Since the style creation code has been made platform independent,
+                // The logfont for the IME is recreated here.
+                const int styleHere = pdoc->StyleIndexAt(sel.MainCaret());
+                LOGFONTW lf = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, L"" };
+                int sizeZoomed = vs.styles[styleHere].size + vs.zoomLevel * SC_FONT_SIZE_MULTIPLIER;
+                if (sizeZoomed <= 2 * SC_FONT_SIZE_MULTIPLIER) // Hangs if sizeZoomed <= 1
+                    sizeZoomed = 2 * SC_FONT_SIZE_MULTIPLIER;
+                // The negative is to allow for leading
+                lf.lfHeight = -::MulDiv(sizeZoomed, stc->GetDPI().y, 72 * SC_FONT_SIZE_MULTIPLIER);
+                lf.lfWeight = vs.styles[styleHere].weight;
+                lf.lfItalic = static_cast<BYTE>(vs.styles[styleHere].italic ? 1 : 0);
+                lf.lfCharSet = DEFAULT_CHARSET;
+                lf.lfFaceName[0] = L'\0';
+                if (vs.styles[styleHere].fontName) {
+                    const char* fontName = vs.styles[styleHere].fontName;
+                    UTF16FromUTF8(fontName, strlen(fontName)+1, lf.lfFaceName, LF_FACESIZE);
+                }
+
+                imm.SetCompositionFontW(imc, &lf);
             }
-
-            ::ImmSetCompositionFontW(imc.hIMC, &lf);
         }
         // Caret is displayed in IME window. So, caret in Scintilla is useless.
         DropCaret();
